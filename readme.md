@@ -1,58 +1,91 @@
-# Stable-Dreamfusion
+# Improvements to Dreamfusion's text-guided 3D shape generation model
+##Promptist: reinforcement learning for automatic prompt optimization
+LMOps is a research initiative on fundamental research and technology for building AI products w/ foundation models, especially on the general technology for enabling AI capabilities w/ LLMs and Generative AI models.
+![image](https://user-images.githubusercontent.com/1070872/207856962-02f08d92-f2bf-441a-b1c3-efff1a4b6187.png)
+###Load Pretrained Model for Stable Diffusion v1.4
+```
+import gradio as grad
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-A pytorch implementation of the text-to-3D model **Dreamfusion**, powered by the [Stable Diffusion](https://github.com/CompVis/stable-diffusion) text-to-2D model.
+def load_prompter():
+  prompter_model = AutoModelForCausalLM.from_pretrained("microsoft/Promptist")
+  tokenizer = AutoTokenizer.from_pretrained("gpt2")
+  tokenizer.pad_token = tokenizer.eos_token
+  tokenizer.padding_side = "left"
+  return prompter_model, tokenizer
 
-**NEWS (2023.6.12)**:
+prompter_model, prompter_tokenizer = load_prompter()
 
-* Support of [Perp-Neg](https://perp-neg.github.io/) to alleviate multi-head problem in Text-to-3D.
-* Support of Perp-Neg for both [Stable Diffusion](https://github.com/CompVis/stable-diffusion) and [DeepFloyd-IF](https://github.com/deep-floyd/IF).
+def generate(plain_text):
+    input_ids = prompter_tokenizer(plain_text.strip()+" Rephrase:", return_tensors="pt").input_ids
+    eos_id = prompter_tokenizer.eos_token_id
+    outputs = prompter_model.generate(input_ids, do_sample=False, max_new_tokens=75, num_beams=8, num_return_sequences=8, eos_token_id=eos_id, pad_token_id=eos_id, length_penalty=-1.0)
+    output_texts = prompter_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    res = output_texts[0].replace(plain_text+" Rephrase:", "").strip()
+    return res
 
-**NEWS (2023.5.8)**:
-* Support of [DeepFloyd-IF](https://github.com/deep-floyd/IF) as the guidance model.
-* Enhance Image-to-3D quality, support Image + Text condition of [Make-it-3D](https://make-it-3d.github.io/).
+txt = grad.Textbox(lines=1, label="Initial Text", placeholder="Input Prompt")
+out = grad.Textbox(lines=1, label="Optimized Prompt")
+examples = ["A rabbit is wearing a space suit", "Several railroad tracks with one train passing by", "The roof is wet from the rain", "Cats dancing in a space club"]
+
+grad.Interface(fn=generate,
+               inputs=txt,
+               outputs=out,
+               title="Promptist Demo",
+               description="Promptist is a prompt interface for Stable Diffusion v1-4 (https://huggingface.co/CompVis/stable-diffusion-v1-4) that optimizes user input into model-preferred prompts.",
+               examples=examples,
+               allow_flagging='never',
+               cache_examples=False,
+               theme="default").launch(enable_queue=True, debug=True)
+```
+###Environment Setup
+```
+alias=`whoami | cut -d'.' -f2`; docker run -it --rm --runtime=nvidia --ipc=host --privileged -v /home/${alias}:/home/${alias} chizewen/pytorch:1.12.1-mpi bash
+```
+```
+pip install git+https://github.com/CZWin32768/accelerate.git
+pip install pytorch_lightning==1.7.7
+pip install transformers==4.23.1
+pip install ftfy regex tqdm scipy
+pip install git+https://github.com/openai/CLIP.git
+pip install --editable ./diffusers
+cd trlx
+pip install --editable .
+cd ..
+# please provide the access token of huggingface and your wandb key
+```
+###Train Promptist
+```
+python ./diffusers_examples/quick-start.py
+
+accelerate launch --multi_gpu --machine_rank ${OMPI_COMM_WORLD_RANK} --main_process_ip ${MASTER_ADDR} --main_process_port ${MASTER_PORT} --num_machines 4 --num_processes 32 ./diff_prompter/ppo_prompter.py --data /data_path --gpt_path /supervised_finetuned_gpt_path --trl_config ./diff_prompter/configs/ppo_config_a100_coco_bsz256_kl0.2.yml --checkpoint_dir /ckpt_dir
+```
+
+
+##Stable-Dreamfusion
+A pytorch implementation of the text-to-3D model Dreamfusion, powered by the Stable Diffusion text-to-2D model.
 
 https://user-images.githubusercontent.com/25863658/236712982-9f93bd32-83bf-423a-bb7c-f73df7ece2e3.mp4
 
 https://user-images.githubusercontent.com/25863658/232403162-51b69000-a242-4b8c-9cd9-4242b09863fa.mp4
-
-### [Update Logs](assets/update_logs.md)
-
-### Colab notebooks:
-* Instant-NGP backbone (`-O`): [![Instant-NGP Backbone](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1MXT3yfOFvO0ooKEfiUUvTKwUkrrlCHpF?usp=sharing)
-
-* Vanilla NeRF backbone (`-O2`): [![Vanilla Backbone](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1mvfxG-S_n_gZafWoattku7rLJ2kPoImL?usp=sharing)
-
-# Important Notice
-This project is a **work-in-progress**, and contains lots of differences from the paper. **The current generation quality cannot match the results from the original paper, and many prompts still fail badly!**
-
-## Notable differences from the paper
-* Since the Imagen model is not publicly available, we use [Stable Diffusion](https://github.com/CompVis/stable-diffusion) to replace it (implementation from [diffusers](https://github.com/huggingface/diffusers)). Different from Imagen, Stable-Diffusion is a latent diffusion model, which diffuses in a latent space instead of the original image space. Therefore, we need the loss to propagate back from the VAE's encoder part too, which introduces extra time cost in training.
-* We use the [multi-resolution grid encoder](https://github.com/NVlabs/instant-ngp/) to implement the NeRF backbone (implementation from [torch-ngp](https://github.com/ashawkey/torch-ngp)), which enables much faster rendering (~10FPS at 800x800).
-* We use the [Adan](https://github.com/sail-sg/Adan) optimizer as default.
-
-# Install
-
-```bash
+### Installation
+```
 git clone https://github.com/ashawkey/stable-dreamfusion.git
 cd stable-dreamfusion
 ```
-
-### Optional: create a python virtual environment
-
+#### Optional: create a python virtual environment
 To avoid python package conflicts, we recommend using a virtual environment, e.g.: using conda or venv:
 
 ```bash
 python -m venv venv_stable-dreamfusion
 source venv_stable-dreamfusion/bin/activate # you need to repeat this step for every new terminal
 ```
-
-### Install with pip
-
+#### Install with pip
 ```bash
 pip install -r requirements.txt
 ```
-
-### Download pre-trained models
+#### Download pre-trained models
 
 To use image-conditioned 3D generation, you need to download some pretrained checkpoints manually:
 * [Zero-1-to-3](https://github.com/cvlab-columbia/zero123) for diffusion backend.
@@ -76,7 +109,7 @@ To use [DeepFloyd-IF](https://github.com/deep-floyd/IF), you need to accept the 
 For DMTet, we port the pre-generated `32/64/128` resolution tetrahedron grids under `tets`.
 The 256 resolution one can be found [here](https://drive.google.com/file/d/1lgvEKNdsbW5RS4gVxJbgBS4Ac92moGSa/view?usp=sharing).
 
-### Build extension (optional)
+#### Build extension (optional)
 By default, we use [`load`](https://pytorch.org/docs/stable/cpp_extension.html#torch.utils.cpp_extension.load) to build the extension at runtime.
 We also provide the `setup.py` to build each extension:
 ```bash
@@ -89,21 +122,21 @@ bash scripts/install_ext.sh
 pip install ./raymarching # install to python path (you still need the raymarching/ folder, since this only installs the built extension.)
 ```
 
-### Taichi backend (optional)
+#### Taichi backend (optional)
 Use [Taichi](https://github.com/taichi-dev/taichi) backend for Instant-NGP. It achieves comparable performance to CUDA implementation while **No CUDA** build is required. Install Taichi with pip:
 ```bash
 pip install -i https://pypi.taichi.graphics/simple/ taichi-nightly
 ```
 
-### Trouble Shooting:
+#### Trouble Shooting:
 * we assume working with the latest version of all dependencies, if you meet any problems from a specific dependency, please try to upgrade it first (e.g., `pip install -U diffusers`). If the problem still holds, [reporting a bug issue](https://github.com/ashawkey/stable-dreamfusion/issues/new?assignees=&labels=bug&template=bug_report.yaml&title=%3Ctitle%3E) will be appreciated!
 * `[F glutil.cpp:338] eglInitialize() failed Aborted (core dumped)`: this usually indicates problems in OpenGL installation. Try to re-install Nvidia driver, or use nvidia-docker as suggested in https://github.com/ashawkey/stable-dreamfusion/issues/131 if you are using a headless server.
 * `TypeError: xxx_forward(): incompatible function arguments`： this happens when we update the CUDA source and you used `setup.py` to install the extensions earlier. Try to re-install the corresponding extension (e.g., `pip install ./gridencoder`).
 
-### Tested environments
+#### Tested environments
 * Ubuntu 22 with torch 1.12 & CUDA 11.6 on a V100.
 
-# Usage
+### Usage
 
 First time running will take some time to compile the CUDA extensions.
 
@@ -225,12 +258,11 @@ python main.py -O --image <image>_rgba.png --workspace trial_image_dmtet --dmtet
 # Warning: this slows down training considerably and consumes lots of disk space!
 python main.py --text "a hamburger" --workspace trial_hamburger -O --vram_O --save_guidance --save_guidance_interval 5 # save every 5 steps
 ```
-
 For example commands, check [`scripts`](./scripts).
 
 For advanced tips and other developing stuff, check [Advanced Tips](./assets/advanced.md).
 
-# Evalutation
+### Evalutation
 
 Reproduce the paper CLIP R-precision evaluation
 
@@ -238,121 +270,4 @@ After the testing part in the usage, the validation set containing projection fr
 
 ```bash
 python r_precision.py --text "a snake is flying in the sky" --workspace snake_HQ --latest ep0100 --mode depth --clip clip-ViT-B-16
-```
-
-# Acknowledgement
-
-This work is based on an increasing list of amazing research works and open-source projects, thanks a lot to all the authors for sharing!
-
-* [DreamFusion: Text-to-3D using 2D Diffusion](https://dreamfusion3d.github.io/)
-    ```
-    @article{poole2022dreamfusion,
-        author = {Poole, Ben and Jain, Ajay and Barron, Jonathan T. and Mildenhall, Ben},
-        title = {DreamFusion: Text-to-3D using 2D Diffusion},
-        journal = {arXiv},
-        year = {2022},
-    }
-    ```
-
-* [Magic3D: High-Resolution Text-to-3D Content Creation](https://research.nvidia.com/labs/dir/magic3d/)
-   ```
-   @inproceedings{lin2023magic3d,
-      title={Magic3D: High-Resolution Text-to-3D Content Creation},
-      author={Lin, Chen-Hsuan and Gao, Jun and Tang, Luming and Takikawa, Towaki and Zeng, Xiaohui and Huang, Xun and Kreis, Karsten and Fidler, Sanja and Liu, Ming-Yu and Lin, Tsung-Yi},
-      booktitle={IEEE Conference on Computer Vision and Pattern Recognition ({CVPR})},
-      year={2023}
-    }
-   ```
-
-* [Zero-1-to-3: Zero-shot One Image to 3D Object](https://github.com/cvlab-columbia/zero123)
-    ```
-    @misc{liu2023zero1to3,
-        title={Zero-1-to-3: Zero-shot One Image to 3D Object},
-        author={Ruoshi Liu and Rundi Wu and Basile Van Hoorick and Pavel Tokmakov and Sergey Zakharov and Carl Vondrick},
-        year={2023},
-        eprint={2303.11328},
-        archivePrefix={arXiv},
-        primaryClass={cs.CV}
-    }
-    ```
-    
-* [Perp-Neg: Re-imagine the Negative Prompt Algorithm: Transform 2D Diffusion into 3D, alleviate Janus problem and Beyond](https://perp-neg.github.io/)
-    ```
-    @article{armandpour2023re,
-      title={Re-imagine the Negative Prompt Algorithm: Transform 2D Diffusion into 3D, alleviate Janus problem and Beyond},
-      author={Armandpour, Mohammadreza and Zheng, Huangjie and Sadeghian, Ali and Sadeghian, Amir and Zhou, Mingyuan},
-      journal={arXiv preprint arXiv:2304.04968},
-      year={2023}
-    }
-    ```
-    
-* [RealFusion: 360° Reconstruction of Any Object from a Single Image](https://github.com/lukemelas/realfusion)
-    ```
-    @inproceedings{melaskyriazi2023realfusion,
-        author = {Melas-Kyriazi, Luke and Rupprecht, Christian and Laina, Iro and Vedaldi, Andrea},
-        title = {RealFusion: 360 Reconstruction of Any Object from a Single Image},
-        booktitle={CVPR}
-        year = {2023},
-        url = {https://arxiv.org/abs/2302.10663},
-    }
-    ```
-
-* [Fantasia3D: Disentangling Geometry and Appearance for High-quality Text-to-3D Content Creation](https://fantasia3d.github.io/)
-    ```
-    @article{chen2023fantasia3d,
-        title={Fantasia3D: Disentangling Geometry and Appearance for High-quality Text-to-3D Content Creation},
-        author={Rui Chen and Yongwei Chen and Ningxin Jiao and Kui Jia},
-        journal={arXiv preprint arXiv:2303.13873},
-        year={2023}
-    }
-    ```
-
-* [Make-It-3D: High-Fidelity 3D Creation from A Single Image with Diffusion Prior](https://make-it-3d.github.io/)
-    ```
-    @article{tang2023make,
-        title={Make-It-3D: High-Fidelity 3D Creation from A Single Image with Diffusion Prior},
-        author={Tang, Junshu and Wang, Tengfei and Zhang, Bo and Zhang, Ting and Yi, Ran and Ma, Lizhuang and Chen, Dong},
-        journal={arXiv preprint arXiv:2303.14184},
-        year={2023}
-    }
-    ```
-
-* [Stable Diffusion](https://github.com/CompVis/stable-diffusion) and the [diffusers](https://github.com/huggingface/diffusers) library.
-
-    ```
-    @misc{rombach2021highresolution,
-        title={High-Resolution Image Synthesis with Latent Diffusion Models},
-        author={Robin Rombach and Andreas Blattmann and Dominik Lorenz and Patrick Esser and Björn Ommer},
-        year={2021},
-        eprint={2112.10752},
-        archivePrefix={arXiv},
-        primaryClass={cs.CV}
-    }
-
-    @misc{von-platen-etal-2022-diffusers,
-        author = {Patrick von Platen and Suraj Patil and Anton Lozhkov and Pedro Cuenca and Nathan Lambert and Kashif Rasul and Mishig Davaadorj and Thomas Wolf},
-        title = {Diffusers: State-of-the-art diffusion models},
-        year = {2022},
-        publisher = {GitHub},
-        journal = {GitHub repository},
-        howpublished = {\url{https://github.com/huggingface/diffusers}}
-    }
-    ```
-
-* The GUI is developed with [DearPyGui](https://github.com/hoffstadt/DearPyGui).
-
-* Puppy image from : https://www.pexels.com/photo/high-angle-photo-of-a-corgi-looking-upwards-2664417/
-
-* Anya images from : https://www.goodsmile.info/en/product/13301/POP+UP+PARADE+Anya+Forger.html
-
-# Citation
-
-If you find this work useful, a citation will be appreciated via:
-```
-@misc{stable-dreamfusion,
-    Author = {Jiaxiang Tang},
-    Year = {2022},
-    Note = {https://github.com/ashawkey/stable-dreamfusion},
-    Title = {Stable-dreamfusion: Text-to-3D with Stable-diffusion}
-}
 ```
